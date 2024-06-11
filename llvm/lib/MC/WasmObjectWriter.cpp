@@ -877,7 +877,7 @@ void WasmObjectWriter::writeImportSection(ArrayRef<wasm::WasmImport> Imports,
       break;
     case wasm::WASM_EXTERNAL_TABLE:
       W->OS << char(Import.Table.ElemType);
-      encodeULEB128(0, W->OS);           // flags
+      encodeULEB128(Import.Table.Limits.Flags, W->OS);
       encodeULEB128(NumElements, W->OS); // initial
       break;
     case wasm::WASM_EXTERNAL_TAG:
@@ -972,7 +972,9 @@ void WasmObjectWriter::writeTableSection(ArrayRef<wasm::WasmTable> Tables) {
 
   encodeULEB128(Tables.size(), W->OS);
   for (const wasm::WasmTable &Table : Tables) {
-    encodeULEB128(Table.Type.ElemType, W->OS);
+    assert(Table.Type.ElemType != wasm::ValType::OTHERREF &&
+           "Cannot encode general ref-typed tables");
+    encodeULEB128((uint32_t)Table.Type.ElemType, W->OS);
     encodeULEB128(Table.Type.Limits.Flags, W->OS);
     encodeULEB128(Table.Type.Limits.Minimum, W->OS);
     if (Table.Type.Limits.Flags & wasm::WASM_LIMITS_FLAG_HAS_MAX)
@@ -1020,7 +1022,8 @@ void WasmObjectWriter::writeElemSection(
     encodeULEB128(TableNumber, W->OS); // the table number
 
   // init expr for starting offset
-  W->OS << char(wasm::WASM_OPCODE_I32_CONST);
+  W->OS << char(is64Bit() ? wasm::WASM_OPCODE_I64_CONST
+                          : wasm::WASM_OPCODE_I32_CONST);
   encodeSLEB128(InitialTableOffset, W->OS);
   W->OS << char(wasm::WASM_OPCODE_END);
 
@@ -1854,14 +1857,9 @@ uint64_t WasmObjectWriter::writeOneObject(MCAssembler &Asm,
       report_fatal_error(".fini_array sections are unsupported");
     if (!WS.getName().starts_with(".init_array"))
       continue;
-    if (WS.getFragmentList().empty())
-      continue;
-
-    // init_array is expected to contain a single non-empty data fragment
-    if (WS.getFragmentList().size() != 3)
-      report_fatal_error("only one .init_array section fragment supported");
-
     auto IT = WS.begin();
+    if (IT == WS.end())
+      continue;
     const MCFragment &EmptyFrag = *IT;
     if (EmptyFrag.getKind() != MCFragment::FT_Data)
       report_fatal_error(".init_array section should be aligned");
